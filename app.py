@@ -1,157 +1,78 @@
+import streamlit as st
 import pandas as pd
-import numpy as np
 import joblib
-import re
+import matplotlib.pyplot as plt
+import requests
+import os
 
-from sklearn.model_selection import train_test_split, RandomizedSearchCV
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.preprocessing import StandardScaler
-from imblearn.over_sampling import SMOTE
-from imblearn.pipeline import Pipeline
+# ==============================
+# DOWNLOAD MODEL FROM DRIVE
+# ==============================
+MODEL_URL = "https://drive.google.com/uc?export=download&id=1ggTEaM2FxFOTar-YQ8-mzuSuZMCfOhtN"
+MODEL_PATH = "high_growth_model.pkl"
 
-print("Loading dataset...")
+if not os.path.exists(MODEL_PATH):
+    st.info("Downloading pre-trained model...")
+    r = requests.get(MODEL_URL, allow_redirects=True)
+    with open(MODEL_PATH, "wb") as f:
+        f.write(r.content)
+    st.success("Model downloaded!")
 
-import pandas as pd
+# Load the model
+model = joblib.load(MODEL_PATH)
 
-CSV_URL = "https://raw.githubusercontent.com/pragalya-bit/startup-investment-evaluator/main/investments_VC.csv"
+# ==============================
+# Streamlit App UI
+# ==============================
+st.set_page_config(page_title="AI Investment Scoring Engine", layout="centered")
+st.title("🚀 AI Startup Investment Analyzer")
+st.markdown("Predict if a startup idea is likely **high-growth** or risky.")
 
-df = pd.read_csv(CSV_URL, encoding="latin1", low_memory=False)
+st.divider()
 
-df.columns = df.columns.str.strip()
+# User inputs
+category = st.text_input("Startup Category (e.g., AI, FinTech, Health)")
+market = st.text_input("Market Type")
+country = st.text_input("Country Code (e.g., USA, IND)")
+state = st.text_input("State Code (e.g., CA, NY)")
+funding_rounds = st.number_input("Expected Funding Rounds", 0, 20, 1)
+founded_year = st.number_input("Founded Year", 1990, 2026, 2024)
 
-print("Loaded", len(df), "rows")
+st.divider()
 
-# ==========================
-# CLEAN FUNDING COLUMN PROPERLY
-# ==========================
+if st.button("🔍 Analyze Investment Potential"):
+    input_data = pd.DataFrame({
+        "category_list": [category],
+        "market": [market],
+        "country_code": [country],
+        "state_code": [state],
+        "funding_rounds": [funding_rounds],
+        "founded_year": [founded_year]
+    })
 
-def clean_money(x):
-    if pd.isna(x):
-        return 0
-    x = str(x)
-    x = re.sub(r"[^\d.]", "", x)  # remove $, commas, etc.
-    return float(x) if x != "" else 0
+    # Predict probability
+    probability = model.predict_proba(input_data)[0][1]
+    score = round(probability * 100, 2)
 
-df["funding_total_usd"] = df["funding_total_usd"].apply(clean_money)
+    # Display score
+    if score >= 80:
+        st.success(f"Investment Score: {score}% – 🟢 STRONG INVESTMENT")
+    elif score >= 60:
+        st.warning(f"Investment Score: {score}% – 🟡 MODERATE POTENTIAL")
+    else:
+        st.error(f"Investment Score: {score}% – 🔴 HIGH RISK")
 
-print("Funding stats:")
-print(df["funding_total_usd"].describe())
+    # Progress bar
+    st.progress(int(score))
 
-# ==========================
-# CREATE HIGH-GROWTH TARGET
-# ==========================
+    # Probability chart
+    st.subheader("📈 Growth Probability")
+    labels = ["Low Growth", "High Growth"]
+    values = [1 - probability, probability]
+    fig, ax = plt.subplots()
+    ax.bar(labels, values, color=["red", "green"])
+    ax.set_ylim([0, 1])
+    st.pyplot(fig)
 
-threshold = df["funding_total_usd"].quantile(0.80)
-df["high_growth"] = (df["funding_total_usd"] >= threshold).astype(int)
-
-print("\nTarget Distribution:")
-print(df["high_growth"].value_counts())
-
-# ==========================
-# REMOVE LEAKAGE
-# ==========================
-
-df_model = df.drop(columns=["funding_total_usd", "high_growth"])
-
-# ==========================
-# SELECT FEATURES
-# ==========================
-
-categorical_features = [
-    "category_list",
-    "country_code",
-    "state_code",
-    "market"
-]
-
-numeric_features = [
-    "funding_rounds",
-    "founded_year"
-]
-
-# Keep only existing columns
-categorical_features = [c for c in categorical_features if c in df_model.columns]
-numeric_features = [c for c in numeric_features if c in df_model.columns]
-
-X = df_model[categorical_features + numeric_features].copy()
-y = df["high_growth"]
-
-# Clean numeric columns
-for col in numeric_features:
-    X[col] = pd.to_numeric(X[col], errors="coerce")
-    X[col] = X[col].fillna(0)
-
-# Clean categorical columns
-for col in categorical_features:
-    X[col] = X[col].astype(str).fillna("Unknown")
-
-# ==========================
-# TRAIN TEST SPLIT
-# ==========================
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size=0.2,
-    random_state=42,
-    stratify=y
-)
-
-# ==========================
-# PREPROCESSING
-# ==========================
-
-preprocessor = ColumnTransformer(
-    transformers=[
-        ("num", StandardScaler(), numeric_features),
-        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features)
-    ]
-)
-
-# ==========================
-# PIPELINE
-# ==========================
-
-pipeline = Pipeline(steps=[
-    ("preprocessor", preprocessor),
-    ("smote", SMOTE(random_state=42)),
-    ("classifier", RandomForestClassifier(random_state=42))
-])
-
-param_grid = {
-    "classifier__n_estimators": [200, 300],
-    "classifier__max_depth": [None, 10],
-    "classifier__min_samples_split": [2, 5]
-}
-
-search = RandomizedSearchCV(
-    pipeline,
-    param_grid,
-    n_iter=6,
-    cv=3,
-    scoring="f1",
-    n_jobs=-1,
-    random_state=42
-)
-
-print("\nTraining model...")
-search.fit(X_train, y_train)
-
-print("\nBest Parameters:")
-print(search.best_params_)
-
-y_pred = search.predict(X_test)
-
-print("\n===== HIGH-GROWTH CLASSIFICATION REPORT =====")
-print(classification_report(y_test, y_pred))
-
-print("\nConfusion Matrix:")
-print(confusion_matrix(y_test, y_pred))
-
-joblib.dump(search.best_estimator_, "high_growth_model.pkl")
-
-print("\nModel saved as high_growth_model.pkl")
-print("\nDONE ✅")
+st.divider()
+st.caption("Final Year Project - AI-Based Startup Growth Prediction System")
