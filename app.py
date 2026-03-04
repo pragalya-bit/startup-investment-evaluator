@@ -14,11 +14,11 @@ from imblearn.pipeline import Pipeline
 
 print("Loading dataset...")
 
-df = pd.read_csv(
-    "data/startup-investments-crunchbase.csv",
-    encoding="latin1",
-    low_memory=False
-)
+import pandas as pd
+
+CSV_URL = "https://raw.githubusercontent.com/pragalya-bit/startup-investment-evaluator/main/investments_VC.csv"
+
+df = pd.read_csv(CSV_URL, encoding="latin1", low_memory=False)
 
 df.columns = df.columns.str.strip()
 
